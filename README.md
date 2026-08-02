@@ -12,6 +12,7 @@ These are **not bundled with `hermes-agent`**. The core repo ships only the plug
 | [`plugin-llm-async-example`](./plugin-llm-async-example) | `ctx.llm.acomplete()` + `asyncio.gather()` | Async LLM lane — concurrent forward + sentiment + back-translation pass for `/translate` |
 | [`example-dashboard`](./example-dashboard) | `dashboard/manifest.json` | Bare-minimum dashboard plugin — a tab, a slot injection, a backend route |
 | [`strike-freedom-cockpit`](./strike-freedom-cockpit) | dashboard theme + slot plugin | Complete custom-skin reskin — palette, layout variant, asset slots, sidebar HUD |
+| [`theme-forge`](./theme-forge) | desktop plugin SDK + dashboard backend | Full theme editor — wallpapers, extended palette, bold, markdown accent colors, matrix rain — applied through Hermes' native skin path |
 
 ## Installing an example as a user plugin
 
@@ -25,6 +26,11 @@ cp -r hermes-example-plugins/plugin-llm-example       ~/.hermes/plugins/
 cp -r hermes-example-plugins/plugin-llm-async-example ~/.hermes/plugins/
 cp -r hermes-example-plugins/example-dashboard        ~/.hermes/plugins/
 cp -r hermes-example-plugins/strike-freedom-cockpit   ~/.hermes/plugins/
+
+# theme-forge is a *desktop* plugin: the JS goes in desktop-plugins/, only the
+# backend (dashboard/) goes in plugins/. See theme-forge/README.md.
+cp -r hermes-example-plugins/theme-forge              ~/.hermes/desktop-plugins/
+mkdir -p ~/.hermes/plugins/theme-forge && cp -r hermes-example-plugins/theme-forge/dashboard ~/.hermes/plugins/theme-forge/
 
 # enable any with a slash command surface
 hermes plugins enable plugin-llm-example
