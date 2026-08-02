@@ -81,7 +81,11 @@ editor na barra lateral direita.
    "Procurar no Mac…", overlay 0–90%, blur 0–12px), **Texto** (fonte, tamanho,
    bold, cores de destaque para títulos/links/código).
 3. **Persistência**: tudo é salvo automaticamente; o Custom persiste entre
-   sessões. O tema ativo repinta ao vivo enquanto você edita.
+   sessões. O tema ativo repinta ao vivo enquanto você edita. **O tema também
+   sobrevive a updates do Hermes**: no boot, o plugin re-afirma o skin
+   configurado (re-escreve `display.skin` → o watcher do gateway re-emite
+   `skin.changed` → o desktop re-aplica o tema mesmo quando o update reseta o
+   armazenamento local do app).
 
 ## Arquitetura
 

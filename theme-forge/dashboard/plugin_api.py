@@ -92,3 +92,30 @@ async def activate(body: dict):
         return {"ok": False, "error": f"config set failed: {exc}"}
 
     return {"ok": True, "name": name, "label": label, "skin_path": str(path)}
+
+
+@router.post("/reassert")
+async def reassert(body: dict):
+    """Re-assert the active forge skin after an app/backend restart.
+
+    The desktop applies a skin only when the gateway broadcasts ``skin.changed``
+    (it fires when ``display.skin`` or the skin YAML mtime changes). On boot the
+    desktop does NOT re-apply the configured skin, so after an update the theme
+    falls back to the app's local storage. Re-writing the same value bumps the
+    config mtime, which makes the gateway watcher broadcast again — every
+    surface re-applies the theme with no manual step.
+    """
+    name = str((body or {}).get("name") or "").strip()
+    if not _NAME_RE.match(name):
+        return {"ok": False, "error": "invalid skin name"}
+    if not (_skins_dir() / f"{name}.yaml").exists():
+        return {"ok": False, "error": f"skin {name} not found — apply it from the editor first"}
+    try:
+        from hermes_cli.config import config_command
+
+        config_command(
+            argparse.Namespace(config_command="set", key="display.skin", value=name, force=True)
+        )
+    except Exception as exc:  # pragma: no cover - surface backend failure to the UI
+        return {"ok": False, "error": f"config set failed: {exc}"}
+    return {"ok": True, "name": name, "reasserted": True}

@@ -1190,6 +1190,33 @@ function skinTokensFromTheme(theme) {
   }
 }
 
+// Re-assert the configured forge skin on plugin boot (register). Re-writing
+// display.skin bumps the config mtime, which makes the gateway's skin watcher
+// re-broadcast skin.changed — the desktop then re-applies the theme even after
+// an app update reset its local storage. Retries a few times in case the
+// gateway is still coming up during boot.
+async function reassertConfiguredSkin() {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const cfg = await host.request('config.get', { key: 'skin' })
+      const raw = cfg && cfg.value !== undefined ? cfg.value : cfg
+      const skin = typeof raw === 'string' ? raw : raw && raw.name ? raw.name : null
+      if (skin && themeMap.has(skin)) {
+        const res = await ctxOf.rest('/reassert', { method: 'POST', body: { name: skin } })
+        if (res && res.ok) console.error('[theme-forge] skin reasserted: ' + skin)
+        else console.error('[theme-forge] reassert failed: ' + JSON.stringify(res))
+      }
+      return
+    } catch (e) {
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, 3000))
+      } else {
+        console.error('[theme-forge] reassert gave up: ' + (e && e.message ? e.message : String(e)))
+      }
+    }
+  }
+}
+
 async function activateSkin(theme) {
   const name = String(theme.name || '').replace(/[^a-z0-9-]/gi, '')
   if (!name) {
@@ -1385,6 +1412,13 @@ export default {
 
     for (const theme of PRESETS) registerTheme(theme)
     customDisposer = registerTheme(customTheme)
+
+    // Persistence across restarts/updates: if the backend config still points
+    // at a forge skin, re-assert it (re-writing display.skin bumps the config
+    // mtime → the gateway watcher re-broadcasts skin.changed → the desktop
+    // re-applies the theme). Without this, an app update resets the desktop to
+    // its local-storage theme even though the config says forge-*.
+    reassertConfiguredSkin()
 
     ctx.register({
       id: 'pane',
