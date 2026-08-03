@@ -87,7 +87,8 @@ const TEXT_DEFAULTS = {
   fontSize: 13, // px base for the conversation text (app default: 13px)
   linkColor: null,
   headingColor: null,
-  codeColor: null
+  codeColor: null,
+  backgroundVideo: null // animated backdrop (URL/data URI/blob) — wins over backgroundImage
 }
 
 const forgeCyber = {
@@ -755,12 +756,16 @@ function loadCustom() {
     const parsed = JSON.parse(raw)
     if (parsed && typeof parsed === 'object' && parsed.colors && parsed.forge) {
       const base = defaultCustom()
-      // Deep-merge extras so older stored customs (missing the Text-tab keys)
-      // keep working without losing their saved values.
+      const forge = { ...TEXT_DEFAULTS, ...base.forge, ...(parsed.forge || {}) }
+      // blob: URLs die with the session that minted them — a stored one from a
+      // previous run is a dead reference (local video that didn't persist).
+      if (typeof forge.backgroundVideo === 'string' && forge.backgroundVideo.startsWith('blob:')) {
+        forge.backgroundVideo = null
+      }
       return {
         ...base,
         ...parsed,
-        forge: { ...TEXT_DEFAULTS, ...base.forge, ...(parsed.forge || {}) }
+        forge
       }
     }
     return defaultCustom()
@@ -811,13 +816,29 @@ let prevHtmlBg = null
 function buildCss(theme) {
   const f = theme.forge || {}
   const extra = f.extraColors || {}
-  const hasImage = Boolean(f.backgroundImage)
-  const glassy = hasImage || Boolean(f.matrixRain)
+  const hasMedia = Boolean(f.backgroundImage || f.backgroundVideo)
+  const fxOnly = Boolean(f.matrixRain || f.scanlines) && !hasMedia
+  const glassy = hasMedia || fxOnly
   const dark = (document.documentElement.dataset.hermesMode || 'dark') !== 'light'
-  const chromeMix = glassy ? (dark ? '50%' : '82%') : '100%'
-  const sidebarMix = glassy ? (dark ? '74%' : '92%') : '100%'
-  const editorMix = glassy ? (dark ? '34%' : '64%') : '100%'
-  const elevatedMix = glassy ? (dark ? '46%' : '74%') : '100%'
+  // With a wallpaper/video the backdrop must DOMINATE the default chrome —
+  // keep the glass tint low so the media actually REPLACES the app's default
+  // background instead of reading as a faint layer under it. Without media
+  // (rain/scanlines only) keep the darker glass so the FX reads on a dark
+  // canvas. No backdrop at all → opaque default surfaces.
+  let chromeMix, sidebarMix, editorMix, elevatedMix
+  if (hasMedia) {
+    chromeMix = dark ? '14%' : '46%'
+    sidebarMix = dark ? '22%' : '58%'
+    editorMix = dark ? '7%' : '30%'
+    elevatedMix = dark ? '12%' : '36%'
+  } else if (fxOnly) {
+    chromeMix = dark ? '50%' : '82%'
+    sidebarMix = dark ? '74%' : '92%'
+    editorMix = dark ? '34%' : '64%'
+    elevatedMix = dark ? '46%' : '74%'
+  } else {
+    chromeMix = sidebarMix = editorMix = elevatedMix = '100%'
+  }
 
   const lines = []
   lines.push(`html[data-hermes-theme="${theme.name}"] { background: transparent; }`)
@@ -920,8 +941,10 @@ function applyForge(theme) {
   }
   el.textContent = buildCss(theme)
 
-  // Paint the html background transparent so the image (painted on <body>)
-  // is actually visible; restore when leaving the forge theme.
+  // Paint the html background transparent so the app's own body/chrome paint
+  // propagates to the canvas and sits BEHIND the FX container (media, overlay,
+  // rain) — otherwise the opaque default chrome would cover the backdrop
+  // layer. Restore when leaving the forge theme.
   if (prevHtmlBg === null) prevHtmlBg = doc.style.background || ''
   doc.style.background = 'transparent'
 
@@ -929,54 +952,105 @@ function applyForge(theme) {
   if (bold > 0) doc.dataset.tfBold = String(bold)
   else delete doc.dataset.tfBold
 
-  paintBodyBackdrop(theme)
+  paintMedia(theme)
   startFx(theme)
 }
 
-// Paint the background image directly on <body> (inline style wins over the
-// app's body paint) and keep the overlay inside the FX container.
-const prevBodyStyle = {}
+// ─────────────────────────────────────────────────────────────────────────────
+// Media layer — the wallpaper (image) or the animated background (video).
+//
+// Lives at the BOTTOM of the FX container (z-index 0), above the canvas but
+// below the overlay/rain/scanlines and the app's glass shell. A real element
+// instead of a body background because:
+//   - <video> cannot be a CSS background (animated backdrop);
+//   - filter blur applies to JUST the media (on <body> it blurred the whole
+//     app UI — every descendant is a filter target).
+// When a video is set it wins over the image; the image stays as fallback.
+// ─────────────────────────────────────────────────────────────────────────────
 
-function paintBodyBackdrop(theme) {
-  const f = theme.forge || {}
-  const img = f.backgroundImage || ''
-  const body = document.body
-  if (!body) return
+const MEDIA_Z = 0
+const OVERLAY_Z = 1
+const RAIN_Z = 2
+const SCANLINE_Z = 3
 
-  if (prevBodyStyle.backgroundImage === undefined) {
-    prevBodyStyle.backgroundImage = body.style.backgroundImage
-    prevBodyStyle.backgroundSize = body.style.backgroundSize
-    prevBodyStyle.backgroundPosition = body.style.backgroundPosition
-    prevBodyStyle.backgroundRepeat = body.style.backgroundRepeat
-    prevBodyStyle.backgroundColor = body.style.backgroundColor
-  }
+let mediaEl = null // <div> (image) or <video>
+let mediaIsVideo = false
 
-  if (img) {
-    const blurPx = Math.max(0, Number(f.blur) || 0)
-    body.style.backgroundImage = `url("${String(img).replace(/"/g, '%22')}")`
-    body.style.backgroundSize = f.imageFit === 'contain' ? 'contain' : 'cover'
-    body.style.backgroundPosition = 'center'
-    body.style.backgroundRepeat = 'no-repeat'
-    body.style.backgroundColor = 'transparent'
-    if (blurPx > 0) body.style.filter = `blur(${blurPx}px) scale(${(1 + blurPx * 0.015).toFixed(3)})`
-    else body.style.filter = ''
-  } else {
-    body.style.backgroundImage = ''
-    body.style.backgroundColor = ''
-    body.style.filter = ''
-  }
+function mediaFilter(f) {
+  const blurPx = Math.max(0, Number(f.blur) || 0)
+  return blurPx > 0 ? `blur(${blurPx}px) scale(${(1 + blurPx * 0.015).toFixed(3)})` : ''
 }
 
-function clearBodyBackdrop() {
-  const body = document.body
-  if (!body) return
-  body.style.backgroundImage = prevBodyStyle.backgroundImage || ''
-  body.style.backgroundSize = prevBodyStyle.backgroundSize || ''
-  body.style.backgroundPosition = prevBodyStyle.backgroundPosition || ''
-  body.style.backgroundRepeat = prevBodyStyle.backgroundRepeat || ''
-  body.style.backgroundColor = prevBodyStyle.backgroundColor || ''
-  body.style.filter = ''
-  Object.keys(prevBodyStyle).forEach(k => delete prevBodyStyle[k])
+function attachVideoLifecycle(video) {
+  const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const onVis = () => {
+    if (document.hidden || reduced()) {
+      try { video.pause() } catch { /* noop */ }
+    } else {
+      try { void video.play().catch(() => {}) } catch { /* noop */ }
+    }
+  }
+  document.addEventListener('visibilitychange', onVis)
+  video._tfCleanup = () => document.removeEventListener('visibilitychange', onVis)
+  if (document.hidden || reduced()) onVis()
+}
+
+function paintMedia(theme) {
+  const f = theme.forge || {}
+  const video = f.backgroundVideo || ''
+  const img = video ? '' : f.backgroundImage || ''
+  const fit = f.imageFit === 'contain' ? 'contain' : 'cover'
+  const filter = mediaFilter(f)
+
+  if (!video && !img) {
+    if (mediaEl) {
+      mediaEl.remove()
+      mediaEl = null
+      mediaIsVideo = false
+    }
+    return
+  }
+
+  const host = ensureFxContainer()
+  const base = `position:absolute;inset:0;width:100%;height:100%;z-index:${MEDIA_Z};pointer-events:none;`
+
+  if (video) {
+    if (!mediaEl || !mediaIsVideo) {
+      if (mediaEl) mediaEl.remove()
+      const v = document.createElement('video')
+      v.setAttribute('autoplay', '')
+      v.setAttribute('muted', '')
+      v.setAttribute('loop', '')
+      v.setAttribute('playsinline', '')
+      v.setAttribute('preload', 'auto')
+      v.style.cssText = base + `object-fit:${fit};`
+      v.addEventListener('error', () =>
+        console.error('[theme-forge] vídeo de fundo falhou ao carregar: ' + String(video).slice(0, 120))
+      )
+      host.appendChild(v)
+      mediaEl = v
+      mediaIsVideo = true
+      attachVideoLifecycle(v)
+    }
+    mediaEl.src = video
+    mediaEl.style.objectFit = fit
+    mediaEl.style.filter = filter
+    mediaEl.load()
+    try { void mediaEl.play().catch(() => {}) } catch { /* noop */ }
+  } else {
+    if (!mediaEl || mediaIsVideo) {
+      if (mediaEl) mediaEl.remove()
+      const d = document.createElement('div')
+      d.style.cssText =
+        base + 'background-repeat:no-repeat;background-position:center;'
+      host.appendChild(d)
+      mediaEl = d
+      mediaIsVideo = false
+    }
+    mediaEl.style.backgroundImage = `url("${String(img).replace(/"/g, '%22')}")`
+    mediaEl.style.backgroundSize = fit
+    mediaEl.style.filter = filter
+  }
 }
 
 function clearForge() {
@@ -988,7 +1062,6 @@ function clearForge() {
     prevHtmlBg = null
   }
   delete doc.dataset.tfBold
-  clearBodyBackdrop()
   stopFx()
 }
 
@@ -1010,8 +1083,10 @@ function ensureObserver() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FX engine — animated backdrop effects the stock theme model can't do:
-// matrix rain (canvas) and CRT scanlines. Both live in a fixed container
-// behind the glass shell (z-index: -1), owned by the active forge theme.
+// the media layer (wallpaper image / background video), matrix rain (canvas)
+// and CRT scanlines. All live in one fixed container behind the glass shell
+// (z-index: -1) owned by the active forge theme, stacked by explicit
+// z-index: media 0 → overlay 1 → rain 2 → scanlines 3.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FX_ID = 'theme-forge-fx'
@@ -1043,6 +1118,11 @@ function removeFx() {
   if (fxResizeObserver) {
     fxResizeObserver.disconnect()
     fxResizeObserver = null
+  }
+  if (mediaEl) {
+    if (mediaIsVideo && mediaEl._tfCleanup) mediaEl._tfCleanup()
+    mediaEl = null
+    mediaIsVideo = false
   }
   rainCanvas = null
   rainCtx = null
@@ -1086,7 +1166,7 @@ function startMatrixRain() {
   if (rainCanvas || typeof document === 'undefined') return
   const host = ensureFxContainer()
   const canvas = document.createElement('canvas')
-  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;'
+  canvas.style.cssText = `position:absolute;inset:0;width:100%;height:100%;z-index:${RAIN_Z};`
   host.appendChild(canvas)
   rainCanvas = canvas
   rainCtx = canvas.getContext('2d')
@@ -1103,18 +1183,18 @@ function addScanlines() {
   const el = document.createElement('div')
   el.className = 'forge-scanlines'
   el.style.cssText =
-    'position:absolute;inset:0;background:repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0px, rgba(0,0,0,0.22) 1px, transparent 1px, transparent 3px);'
+    `position:absolute;inset:0;z-index:${SCANLINE_Z};background:repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0px, rgba(0,0,0,0.22) 1px, transparent 1px, transparent 3px);`
   host.appendChild(el)
 }
 
 function startFx(theme) {
   const f = theme.forge || {}
-  // Overlay sits between the body image and the rain/scanlines.
+  // Overlay sits above the media (z-index 1), below rain/scanlines.
   if (f.overlayOpacity > 0) {
     const host = ensureFxContainer()
     if (!overlayEl) {
       overlayEl = document.createElement('div')
-      overlayEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;'
+      overlayEl.style.cssText = `position:absolute;inset:0;pointer-events:none;z-index:${OVERLAY_Z};`
       host.appendChild(overlayEl)
     }
     const dark = (document.documentElement.dataset.hermesMode || 'dark') !== 'light'
@@ -1497,12 +1577,17 @@ function ForgePage() {
 function PaneInner({ activeTheme, isForgeActive, wide = false }) {
   const [tab, setTab] = useState('colors')
   const [palette, setPalette] = useState('dark')
+  // Which backdrop editor is open — 'image' or 'video'. Independent of the
+  // data: both fields can coexist, video wins at paint time.
+  const [mediaTab, setMediaTab] = useState(() => (cloneState().forge.backgroundVideo ? 'video' : 'image'))
   const [state, setState] = useState(() => cloneState())
   const [saved, setSaved] = useState(true)
-  const [localFile, setLocalFile] = useState(null) // { name, size } of the picked file
+  const [localFile, setLocalFile] = useState(null) // { name, size } of the picked image
+  const [localVideo, setLocalVideo] = useState(null) // { name, size, persistent } of the picked video
   const [applyName, setApplyName] = useState(CUSTOM_NAME)
   const timer = useRef(null)
   const fileInputRef = useRef(null)
+  const videoInputRef = useRef(null)
   const inactiveWarned = useRef(false)
 
   const colors = palette === 'dark' ? state.darkColors : state.colors
@@ -1537,6 +1622,45 @@ function PaneInner({ activeTheme, isForgeActive, wide = false }) {
   function clearLocalFile() {
     setLocalFile(null)
     bumpExtras({ backgroundImage: null })
+  }
+
+  // Local video picker. Session-first: URL.createObjectURL plays instantly with
+  // no quota cost. Persistence is best-effort — the bytes only survive a
+  // restart if they fit localStorage as a data URI (videos are heavy, so the
+  // cap is tight); bigger files get an honest one-time warning.
+  const VIDEO_PERSIST_MAX = 3.5 * 1024 * 1024
+
+  function pickLocalVideo(file) {
+    if (!file) return
+    const type = String(file.type || '')
+    if (type && !type.startsWith('video/')) {
+      host.notify({
+        kind: 'error',
+        message: 'Formato não suportado — escolha um arquivo de vídeo (mp4, webm, mov…).'
+      })
+      return
+    }
+    const objUrl = URL.createObjectURL(file)
+    const persistent = file.size <= VIDEO_PERSIST_MAX
+    setLocalVideo({ name: file.name, size: file.size, persistent })
+    bumpExtras({ backgroundVideo: objUrl })
+    if (persistent) {
+      const reader = new FileReader()
+      reader.onload = () => bumpExtras({ backgroundVideo: reader.result })
+      reader.onerror = () => console.error('[theme-forge] falha ao ler vídeo local')
+      reader.readAsDataURL(file)
+    } else {
+      host.notify({
+        kind: 'info',
+        message:
+          'Vídeo grande demais para salvar no app (máx. 3.5MB) — funciona nesta sessão. Para manter após reiniciar, cole um link (URL) de vídeo.'
+      })
+    }
+  }
+
+  function clearLocalVideo() {
+    setLocalVideo(null)
+    bumpExtras({ backgroundVideo: null })
   }
 
   function fmtSize(bytes) {
@@ -1677,7 +1801,7 @@ function PaneInner({ activeTheme, isForgeActive, wide = false }) {
               jsx(TabsList, {
                 children: [
                   jsx(TabsTrigger, { value: 'colors', children: 'Cores' }),
-                  jsx(TabsTrigger, { value: 'image', children: 'Imagem' }),
+                  jsx(TabsTrigger, { value: 'image', children: 'Fundo' }),
                   jsx(TabsTrigger, { value: 'text', children: 'Texto' })
                 ]
               }),
@@ -1733,55 +1857,121 @@ function PaneInner({ activeTheme, isForgeActive, wide = false }) {
                 jsxs('div', {
                   className: 'flex flex-col gap-4 pt-1',
                   children: [
-                    jsxs(Section, {
-                      title: 'Imagem de fundo',
-                      children: [
-                        jsxs('div', {
-                          className: 'flex items-center gap-2',
-                          children: [
-                            jsx('input', {
-                              ref: fileInputRef,
-                              type: 'file',
-                              accept: 'image/*',
-                              className: 'hidden',
-                              onChange: e => {
-                                pickLocalImage(e.target.files && e.target.files[0])
-                                e.target.value = ''
-                              }
-                            }),
-                            jsx(Button, {
-                              variant: 'outline',
-                              size: 'sm',
-                              onClick: () => fileInputRef.current && fileInputRef.current.click(),
-                              children: jsxs('span', {
-                                className: 'flex items-center gap-1.5',
-                                children: [
-                                  jsx(icons.FolderOpen, { className: 'h-3.5 w-3.5' }),
-                                  'Procurar no Mac…'
-                                ]
-                              })
-                            }),
-                            localFile &&
-                              jsx('span', {
-                                className: 'min-w-0 flex-1 truncate text-[0.625rem] text-(--ui-text-tertiary)',
-                                children: localFile.name + ' · ' + fmtSize(localFile.size)
-                              })
-                          ]
-                        }),
-                        jsx(Input, {
-                          placeholder: '…ou cole uma URL (https://)',
-                          value: extras.backgroundImage && !extras.backgroundImage.startsWith('data:') ? extras.backgroundImage : '',
-                          onChange: e => bumpExtras({ backgroundImage: e.target.value || null })
-                        }),
-                        jsx(Segmented, {
-                          options: [
-                            ['cover', 'Cobrir'],
-                            ['contain', 'Ajustar']
-                          ],
-                          value: extras.imageFit,
-                          onChange: v => bumpExtras({ imageFit: v })
-                        })
-                      ]
+                    jsx(Segmented, {
+                      options: [
+                        ['image', 'Imagem'],
+                        ['video', 'Vídeo animado']
+                      ],
+                      value: mediaTab,
+                      onChange: setMediaTab
+                    }),
+                    mediaTab === 'image' &&
+                      jsxs(Section, {
+                        title: 'Imagem de fundo',
+                        children: [
+                          jsxs('div', {
+                            className: 'flex items-center gap-2',
+                            children: [
+                              jsx('input', {
+                                ref: fileInputRef,
+                                type: 'file',
+                                accept: 'image/*',
+                                className: 'hidden',
+                                onChange: e => {
+                                  pickLocalImage(e.target.files && e.target.files[0])
+                                  e.target.value = ''
+                                }
+                              }),
+                              jsx(Button, {
+                                variant: 'outline',
+                                size: 'sm',
+                                onClick: () => fileInputRef.current && fileInputRef.current.click(),
+                                children: jsxs('span', {
+                                  className: 'flex items-center gap-1.5',
+                                  children: [
+                                    jsx(icons.FolderOpen, { className: 'h-3.5 w-3.5' }),
+                                    'Procurar no Mac…'
+                                  ]
+                                })
+                              }),
+                              localFile &&
+                                jsx('span', {
+                                  className: 'min-w-0 flex-1 truncate text-[0.625rem] text-(--ui-text-tertiary)',
+                                  children: localFile.name + ' · ' + fmtSize(localFile.size)
+                                })
+                            ]
+                          }),
+                          jsx(Input, {
+                            placeholder: '…ou cole uma URL (https://)',
+                            value: extras.backgroundImage && !extras.backgroundImage.startsWith('data:') ? extras.backgroundImage : '',
+                            onChange: e => bumpExtras({ backgroundImage: e.target.value || null })
+                          })
+                        ]
+                      }),
+                    mediaTab === 'video' &&
+                      jsxs(Section, {
+                        title: 'Vídeo de fundo (loop animado)',
+                        children: [
+                          jsx('p', {
+                            className: 'text-[0.625rem] leading-relaxed text-(--ui-text-quaternary)',
+                            children:
+                              'O vídeo substitui a imagem quando presente. Mudo, em loop, pausa quando o app não está visível e respeita "reduzir movimento" do macOS.'
+                          }),
+                          jsxs('div', {
+                            className: 'flex items-center gap-2',
+                            children: [
+                              jsx('input', {
+                                ref: videoInputRef,
+                                type: 'file',
+                                accept: 'video/*,.mp4,.webm,.mov,.m4v,.ogv',
+                                className: 'hidden',
+                                onChange: e => {
+                                  pickLocalVideo(e.target.files && e.target.files[0])
+                                  e.target.value = ''
+                                }
+                              }),
+                              jsx(Button, {
+                                variant: 'outline',
+                                size: 'sm',
+                                onClick: () => videoInputRef.current && videoInputRef.current.click(),
+                                children: jsxs('span', {
+                                  className: 'flex items-center gap-1.5',
+                                  children: [
+                                    jsx(icons.MonitorPlay, { className: 'h-3.5 w-3.5' }),
+                                    'Procurar no Mac…'
+                                  ]
+                                })
+                              }),
+                              localVideo &&
+                                jsx('span', {
+                                  className: 'min-w-0 flex-1 truncate text-[0.625rem] text-(--ui-text-tertiary)',
+                                  children:
+                                    localVideo.name +
+                                    ' · ' +
+                                    fmtSize(localVideo.size) +
+                                    (localVideo.persistent ? '' : ' · não persiste')
+                                })
+                            ]
+                          }),
+                          jsx(Input, {
+                            placeholder: '…ou cole uma URL de vídeo (https://…mp4|webm)',
+                            value:
+                              extras.backgroundVideo &&
+                              !extras.backgroundVideo.startsWith('data:') &&
+                              !extras.backgroundVideo.startsWith('blob:')
+                                ? extras.backgroundVideo
+                                : '',
+                            onChange: e => bumpExtras({ backgroundVideo: e.target.value || null })
+                          })
+                        ]
+                      }),
+                    jsx(Segmented, {
+                      options: [
+                        ['cover', 'Cobrir'],
+                        ['contain', 'Ajustar']
+                      ],
+                      value: extras.imageFit,
+                      onChange: v => bumpExtras({ imageFit: v })
                     }),
                     jsxs(Section, {
                       title: 'Overlay (escurece para legibilidade)',
@@ -1805,7 +1995,7 @@ function PaneInner({ activeTheme, isForgeActive, wide = false }) {
                       })
                     }),
                     jsxs(Section, {
-                      title: 'Blur',
+                      title: 'Blur (só no fundo)',
                       children: jsx('div', {
                         className: 'flex items-center gap-2',
                         children: [
@@ -1825,17 +2015,24 @@ function PaneInner({ activeTheme, isForgeActive, wide = false }) {
                         ]
                       })
                     }),
-                    extras.backgroundImage
+                    extras.backgroundVideo
                       ? jsx(Button, {
                           variant: 'outline',
                           size: 'sm',
-                          onClick: clearLocalFile,
-                          children: 'Remover imagem'
+                          onClick: clearLocalVideo,
+                          children: 'Remover vídeo'
                         })
-                      : jsx('p', {
-                          className: 'text-[0.625rem] text-(--ui-text-quaternary)',
-                          children: 'Sem imagem — o tema usa cor sólida.'
-                        })
+                      : extras.backgroundImage
+                        ? jsx(Button, {
+                            variant: 'outline',
+                            size: 'sm',
+                            onClick: clearLocalFile,
+                            children: 'Remover imagem'
+                          })
+                        : jsx('p', {
+                            className: 'text-[0.625rem] text-(--ui-text-quaternary)',
+                            children: 'Sem fundo — o tema usa cor sólida.'
+                          })
                   ]
                 }),
               tab === 'text' &&

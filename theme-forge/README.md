@@ -1,8 +1,8 @@
 # Theme Forge — tema seu Hermes Desktop
 
 **Plugin para o Hermes Desktop que faz o que o app não faz nativamente: temas
-com imagem de fundo, paleta estendida, bold, tamanho de fonte, cores de
-destaque no markdown e fundos animados (matrix rain, scanlines).**
+com imagem de fundo ou vídeo animado, paleta estendida, bold, tamanho de fonte,
+cores de destaque no markdown e fundos animados (matrix rain, scanlines).**
 
 - ✅ Sem build, sem tocar no código do app — um arquivo ESM + um backend Python opcional
 - ✅ Aplicação em **1 clique** ("Aplicar") via o mecanismo nativo de skins do Hermes
@@ -30,7 +30,7 @@ destaque no markdown e fundos animados (matrix rain, scanlines).**
 
 | Recurso | Por que não existe nativamente |
 |---|---|
-| **Imagem de fundo** (wallpaper) com overlay/blur | O modelo `DesktopTheme` só tem cores sólidas |
+| **Fundo com imagem ou vídeo animado** + overlay/blur | O modelo `DesktopTheme` só tem cores sólidas |
 | **Paleta estendida** — `--ui-red/green/blue/purple/yellow/cyan/orange/warm` | Essas cores são fixas no `styles.css` do app |
 | **Bold no texto** (3 níveis) | Sem controle de peso tipográfico por tema |
 | **Tamanho da fonte da conversa** (11–18px) | Token existe mas sem UI |
@@ -77,9 +77,9 @@ editor na barra lateral direita.
 
 1. **Aplicar um tema**: no painel, escolha o tema no seletor e clique **Aplicar**
    — ou selecione em **⌘K → Themes** (a grade nativa).
-2. **Editar**: abas **Cores** (núcleo + paleta estendida), **Imagem** (URL ou
-   "Procurar no Mac…", overlay 0–90%, blur 0–12px), **Texto** (fonte, tamanho,
-   bold, cores de destaque para títulos/links/código).
+2. **Editar**: abas **Cores** (núcleo + paleta estendida), **Fundo** (imagem ou
+   vídeo animado — URL ou "Procurar no Mac…", overlay 0–90%, blur 0–12px),
+   **Texto** (fonte, tamanho, bold, cores de destaque para títulos/links/código).
 3. **Persistência**: tudo é salvo automaticamente; o Custom persiste entre
    sessões. O tema ativo repinta ao vivo enquanto você edita. **O tema também
    sobrevive a updates do Hermes**: no boot, o plugin re-afirma o skin
@@ -92,10 +92,11 @@ editor na barra lateral direita.
 - `plugin.js` — contribui 13 temas (`THEMES_AREA`), painel + página
   (`ROUTES_AREA` + `SIDEBAR_NAV_AREA`) e um **CSS injection engine**: um
   `MutationObserver` no `<html>` detecta o tema ativo (`data-hermes-theme`) e
-  injeta `<style>` com cores/bold/tamanho; a imagem de fundo é pintada
-  diretamente no `<body>` (inline vence o fundo do app) e os efeitos (rain,
-  scanlines, overlay) vivem num container `position:fixed; z-index:-1`.
-  Re-registrar um tema bumpa `$registryVersion` → o app repinta ao vivo.
+  injeta `<style>` com cores/bold/tamanho; o fundo (imagem **ou** vídeo
+  `<video autoplay muted loop>`) é uma **camada de mídia** num container
+  `position:fixed; z-index:-1` (blur só no fundo, não na UI), com overlay, rain
+  e scanlines empilhados acima (z-index 0–3). Re-registrar um tema bumpa
+  `$registryVersion` → o app repinta ao vivo.
 - `dashboard/plugin_api.py` — endpoint `POST /activate`: valida tokens hex
   (whitelist), grava `skins/<nome>.yaml` e seta `display.skin`. O watcher do
   gateway emite `skin.changed` e todas as superfícies repintam. O formato do
@@ -103,8 +104,9 @@ editor na barra lateral direita.
 
 ## Limitações conhecidas
 
-- Imagem local vira **data URI** (limite ~2.5MB) — acima disso o tema funciona
-  na sessão mas não persiste (quota do armazenamento); o plugin avisa.
+- Imagem local vira **data URI** (limite ~2.5MB) e vídeo local ~3.5MB — acima
+  disso o fundo funciona na sessão mas não persiste (quota do armazenamento);
+  o plugin avisa. Para fundos grandes/definitivos, cole uma URL.
 - O "Aplicar" usa a paleta do skin (conversão terminal-first); os **extras**
   (imagem, bold, cores, rain) continuam vindo do plugin quando o tema está ativo.
 - A ativação é global (skin do Hermes) — vale para CLI/TUI/desktop.
