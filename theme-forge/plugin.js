@@ -730,6 +730,12 @@ const forgeSith = filmTheme({
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'forge-custom-v1'
+// The wallpaper data URI lives in its OWN storage key so a large image can
+// never block the theme save (blur/overlay/colors are small and always
+// persist). Before, the whole theme — image included — went into one JSON:
+// a big data URI blew the localStorage quota and the ENTIRE save failed
+// silently, so slider tweaks rolled back on every reload.
+const STORAGE_IMG_KEY = 'forge-custom-img-v1'
 const PRESETS = [forgeCyber, forgeGlass, forgePaper, forgeMatrix, forgeHacker, forgeSpidey, forgeWolverine, forgeDeadpool, forgeIronman, forgeBatman, forgeDune, forgeTerminator, forgeSith]
 const CUSTOM_NAME = 'forge-custom'
 
@@ -762,6 +768,16 @@ function loadCustom() {
       if (typeof forge.backgroundVideo === 'string' && forge.backgroundVideo.startsWith('blob:')) {
         forge.backgroundVideo = null
       }
+      // Wallpaper data URI from its dedicated key (large images live there so
+      // they can't block the theme save). Older saves carry the data URI
+      // inline in forge.backgroundImage — migrate it to the dedicated key.
+      const imgKey = storage?.get(STORAGE_IMG_KEY, null)
+      const inline = typeof forge.backgroundImage === 'string' && forge.backgroundImage.startsWith('data:')
+      if (typeof imgKey === 'string' && imgKey.startsWith('data:')) {
+        forge.backgroundImage = imgKey
+      } else if (inline) {
+        // keep as-is; next saveCustom() migrates it out of the theme JSON
+      }
       return {
         ...base,
         ...parsed,
@@ -777,18 +793,37 @@ function loadCustom() {
 let saveWarned = false
 
 function saveCustom() {
+  // Split the payload: the theme (colors, blur, overlay, text) saves ALWAYS —
+  // a big wallpaper data URI must never be able to roll back slider tweaks.
+  // The image goes to its own key; if IT overflows, only the image is lost.
+  const forge = customTheme.forge || {}
+  const inlineImg = forge.backgroundImage
+  const isData = typeof inlineImg === 'string' && inlineImg.startsWith('data:')
+  const themeForSave = isData
+    ? { ...customTheme, forge: { ...forge, backgroundImage: null } }
+    : customTheme
   try {
-    storage?.set(STORAGE_KEY, JSON.stringify(customTheme))
+    storage?.set(STORAGE_KEY, JSON.stringify(themeForSave))
     saveWarned = false
   } catch {
-    // localStorage quota exceeded (large data-URI wallpaper). It still works
-    // for this session, but won't survive a restart — warn once.
     if (!saveWarned && typeof host !== 'undefined') {
       saveWarned = true
       host.notify({
         kind: 'error',
-        message:
-          'Tema não pôde ser salvo no armazenamento (imagem muito grande). Funciona nesta sessão, mas some ao reiniciar — use uma imagem menor.'
+        message: 'Tema não pôde ser salvo (armazenamento cheio).' // pragma: no cover
+      })
+    }
+  }
+  try {
+    if (isData) storage?.set(STORAGE_IMG_KEY, inlineImg)
+    else if (!forge.backgroundImage) storage?.remove(STORAGE_IMG_KEY)
+  } catch {
+    // Only the wallpaper is lost on reload — theme tweaks are already safe.
+    if (!saveWarned && typeof host !== 'undefined') {
+      saveWarned = true
+      host.notify({
+        kind: 'error',
+        message: 'Imagem de fundo não coube no armazenamento — use um arquivo menor ou cole uma URL.'
       })
     }
   }
@@ -1129,7 +1164,10 @@ function diagState() {
       ' | veil=' + (overlayEl ? overlayEl.style.background : 'null') +
       ' | fx=' + (fxContainer ? 'y:z' + fxContainer.style.zIndex : 'null') +
       ' | bodyInline=' + (body ? (body.style.backgroundImage ? 'STALE' : 'clean') : '?') +
-      ' | chrome=' + getComputedStyle(document.documentElement).getPropertyValue('--ui-bg-chrome').trim().slice(0, 30)
+      ' | chrome=' + getComputedStyle(document.documentElement).getPropertyValue('--ui-bg-chrome').trim().slice(0, 30) +
+      ' | imgBytes=' + (typeof f.backgroundImage === 'string' ? Math.round(f.backgroundImage.length / 1024) + 'KB' : '0') +
+      ' | themeJSON=' + Math.round(JSON.stringify(theme).length / 1024) + 'KB' +
+      ' | saveWarned=' + saveWarned
     )
   } catch (e) {
     console.error('[theme-forge] diag error: ' + (e && e.message ? e.message : String(e)))
