@@ -978,7 +978,18 @@ let mediaIsVideo = false
 
 function mediaFilter(f) {
   const blurPx = Math.max(0, Number(f.blur) || 0)
-  return blurPx > 0 ? `blur(${blurPx}px) scale(${(1 + blurPx * 0.015).toFixed(3)})` : ''
+  // `scale()` is NOT a valid `filter` function — it only exists on `transform`.
+  // An invalid declaration makes Chromium drop the WHOLE filter (blur silently
+  // never applied). Valid blur here; the edge-reveal compensation lives in
+  // mediaTransform so both properties are well-formed.
+  return blurPx > 0 ? `blur(${blurPx}px)` : ''
+}
+
+function mediaTransform(f) {
+  const blurPx = Math.max(0, Number(f.blur) || 0)
+  // Grow the media slightly so the transparent edge ring a blur leaves behind
+  // stays off-screen (cover images) — scale is a transform, not a filter.
+  return blurPx > 0 ? `scale(${(1 + blurPx * 0.015).toFixed(3)})` : ''
 }
 
 function attachVideoLifecycle(video) {
@@ -1001,6 +1012,7 @@ function paintMedia(theme) {
   const img = video ? '' : f.backgroundImage || ''
   const fit = f.imageFit === 'contain' ? 'contain' : 'cover'
   const filter = mediaFilter(f)
+  const transform = mediaTransform(f)
 
   if (!video && !img) {
     if (mediaEl) {
@@ -1035,6 +1047,7 @@ function paintMedia(theme) {
     mediaEl.src = video
     mediaEl.style.objectFit = fit
     mediaEl.style.filter = filter
+    mediaEl.style.transform = transform
     mediaEl.load()
     try { void mediaEl.play().catch(() => {}) } catch { /* noop */ }
   } else {
@@ -1050,6 +1063,7 @@ function paintMedia(theme) {
     mediaEl.style.backgroundImage = `url("${String(img).replace(/"/g, '%22')}")`
     mediaEl.style.backgroundSize = fit
     mediaEl.style.filter = filter
+    mediaEl.style.transform = transform
   }
 }
 
