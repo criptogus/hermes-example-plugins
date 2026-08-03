@@ -827,10 +827,13 @@ function buildCss(theme) {
   // canvas. No backdrop at all → opaque default surfaces.
   let chromeMix, sidebarMix, editorMix, elevatedMix
   if (hasMedia) {
-    chromeMix = dark ? '14%' : '46%'
-    sidebarMix = dark ? '22%' : '58%'
-    editorMix = dark ? '7%' : '30%'
-    elevatedMix = dark ? '12%' : '36%'
+    // Media present → it must DOMINATE the content area, but the sidebar stays
+    // a clearly distinct panel (classic glass hierarchy): wallpaper in the
+    // middle, darker sidebar, so the app keeps its division of areas.
+    chromeMix = dark ? '16%' : '48%'
+    sidebarMix = dark ? '60%' : '78%'
+    editorMix = dark ? '10%' : '34%'
+    elevatedMix = dark ? '18%' : '42%'
   } else if (fxOnly) {
     chromeMix = dark ? '50%' : '82%'
     sidebarMix = dark ? '74%' : '92%'
@@ -931,6 +934,27 @@ function buildCss(theme) {
   return lines.filter(Boolean).join('\n')
 }
 
+// The pre-refactor plugin painted the wallpaper inline on <body>; a hot-reload
+// leaves that paint behind (no code clears it) and it propagates to the canvas
+// as a STALE wallpaper — the new media layer/overlay/blur then act on the
+// invisible FX layer while the stale image keeps showing. The app itself never
+// sets body backgrounds inline, so clearing them here is safe.
+function clearBodyLegacy() {
+  const body = document.body
+  if (!body) return
+  for (const p of [
+    'backgroundImage',
+    'backgroundSize',
+    'backgroundPosition',
+    'backgroundRepeat',
+    'backgroundColor',
+    'filter',
+    'transform'
+  ]) {
+    if (body.style[p]) body.style[p] = ''
+  }
+}
+
 function applyForge(theme) {
   const doc = document.documentElement
   let el = document.getElementById(CSS_ID)
@@ -947,6 +971,8 @@ function applyForge(theme) {
   // layer. Restore when leaving the forge theme.
   if (prevHtmlBg === null) prevHtmlBg = doc.style.background || ''
   doc.style.background = 'transparent'
+
+  clearBodyLegacy()
 
   const bold = Number(theme.forge?.boldLevel) || 0
   if (bold > 0) doc.dataset.tfBold = String(bold)
@@ -1084,6 +1110,30 @@ function refresh() {
   const theme = active ? themeMap.get(active) : null
   if (theme) applyForge(theme)
   else clearForge()
+}
+
+// TEMP diagnostic — logs the real runtime state to desktop.log (console.error
+// is the only level the log forwards). Remove before shipping.
+function diagState() {
+  try {
+    const active = document.documentElement.dataset.hermesTheme
+    const theme = active ? themeMap.get(active) : null
+    const f = (theme && theme.forge) || {}
+    const body = document.body
+    console.error(
+      '[theme-forge] diag active=' + active +
+      ' | img=' + (f.backgroundImage ? 'set:' + String(f.backgroundImage).slice(0, 20) : 'null') +
+      ' | vid=' + (f.backgroundVideo ? 'set' : 'null') +
+      ' | overlay=' + f.overlayOpacity + ' | blur=' + f.blur +
+      ' | media=' + (mediaEl ? mediaEl.tagName + ':z' + mediaEl.style.zIndex + ':f[' + (mediaEl.style.filter || '∅') + ']:t[' + (mediaEl.style.transform || '∅') + ']' : 'null') +
+      ' | veil=' + (overlayEl ? overlayEl.style.background : 'null') +
+      ' | fx=' + (fxContainer ? 'y:z' + fxContainer.style.zIndex : 'null') +
+      ' | bodyInline=' + (body ? (body.style.backgroundImage ? 'STALE' : 'clean') : '?') +
+      ' | chrome=' + getComputedStyle(document.documentElement).getPropertyValue('--ui-bg-chrome').trim().slice(0, 30)
+    )
+  } catch (e) {
+    console.error('[theme-forge] diag error: ' + (e && e.message ? e.message : String(e)))
+  }
 }
 
 function ensureObserver() {
@@ -1240,6 +1290,7 @@ function publishCustom() {
   customDisposer = registerTheme(customTheme)
   saveCustom()
   refresh()
+  diagState()
 }
 
 function registerTheme(theme) {
@@ -1567,6 +1618,7 @@ export default {
     // keep watching for theme switches.
     ensureObserver()
     refresh()
+    setTimeout(diagState, 1500)
   }
 }
 
