@@ -1147,33 +1147,6 @@ function refresh() {
   else clearForge()
 }
 
-// TEMP diagnostic — logs the real runtime state to desktop.log (console.error
-// is the only level the log forwards). Remove before shipping.
-function diagState() {
-  try {
-    const active = document.documentElement.dataset.hermesTheme
-    const theme = active ? themeMap.get(active) : null
-    const f = (theme && theme.forge) || {}
-    const body = document.body
-    console.error(
-      '[theme-forge] diag active=' + active +
-      ' | img=' + (f.backgroundImage ? 'set:' + String(f.backgroundImage).slice(0, 20) : 'null') +
-      ' | vid=' + (f.backgroundVideo ? 'set' : 'null') +
-      ' | overlay=' + f.overlayOpacity + ' | blur=' + f.blur +
-      ' | media=' + (mediaEl ? mediaEl.tagName + ':z' + mediaEl.style.zIndex + ':f[' + (mediaEl.style.filter || '∅') + ']:t[' + (mediaEl.style.transform || '∅') + ']' : 'null') +
-      ' | veil=' + (overlayEl ? overlayEl.style.background : 'null') +
-      ' | fx=' + (fxContainer ? 'y:z' + fxContainer.style.zIndex : 'null') +
-      ' | bodyInline=' + (body ? (body.style.backgroundImage ? 'STALE' : 'clean') : '?') +
-      ' | chrome=' + getComputedStyle(document.documentElement).getPropertyValue('--ui-bg-chrome').trim().slice(0, 30) +
-      ' | imgBytes=' + (typeof f.backgroundImage === 'string' ? Math.round(f.backgroundImage.length / 1024) + 'KB' : '0') +
-      ' | themeJSON=' + Math.round(JSON.stringify(theme).length / 1024) + 'KB' +
-      ' | saveWarned=' + saveWarned
-    )
-  } catch (e) {
-    console.error('[theme-forge] diag error: ' + (e && e.message ? e.message : String(e)))
-  }
-}
-
 function ensureObserver() {
   if (observer || typeof document === 'undefined') return
   observer = new MutationObserver(refresh)
@@ -1328,7 +1301,6 @@ function publishCustom() {
   customDisposer = registerTheme(customTheme)
   saveCustom()
   refresh()
-  diagState()
 }
 
 function registerTheme(theme) {
@@ -1656,7 +1628,6 @@ export default {
     // keep watching for theme switches.
     ensureObserver()
     refresh()
-    setTimeout(diagState, 1500)
   }
 }
 
