@@ -88,7 +88,12 @@ const TEXT_DEFAULTS = {
   linkColor: null,
   headingColor: null,
   codeColor: null,
-  backgroundVideo: null // animated backdrop (URL/data URI/blob) — wins over backgroundImage
+  backgroundVideo: null, // animated backdrop (URL/data URI/blob) — wins over backgroundImage
+  // Sidebar per-element colors (null = theme default). Scoped token overrides
+  // via the app's stable data-slot hooks — hover/active keep text-foreground.
+  sidebarNavColor: null, // New Session · Capabilities · Messaging · Artifacts
+  sidebarSectionColor: null, // group labels: Pinned, Recents, …
+  sidebarItemColor: null // session + project row labels
 }
 
 const forgeCyber = {
@@ -965,6 +970,21 @@ function buildCss(theme) {
       `html[data-hermes-theme="${theme.name}"] .prose pre { border-color: color-mix(in srgb, ${f.codeColor} 40%, transparent); }`
     )
   }
+
+  // Sidebar per-element colors. Token overrides scoped to the nav group
+  // (:has — only the top nav rows are sidebar-menu-button) and the content
+  // area; the nav scope is more specific, so nav wins inside its group. The
+  // app's hover/active use `text-foreground` (a different token), so they
+  // still light up — only the resting color changes.
+  const sidebarRules = [
+    f.sidebarNavColor &&
+      `html[data-hermes-theme="${theme.name}"] [data-slot="sidebar-group"]:has([data-slot="sidebar-menu-button"]) { --ui-text-secondary: ${f.sidebarNavColor}; }`,
+    f.sidebarItemColor &&
+      `html[data-hermes-theme="${theme.name}"] [data-slot="sidebar-content"] { --ui-text-secondary: ${f.sidebarItemColor}; }`,
+    f.sidebarSectionColor &&
+      `html[data-hermes-theme="${theme.name}"] [data-slot="sidebar-group-label"] { color: ${f.sidebarSectionColor}; }`
+  ].filter(Boolean)
+  lines.push(...sidebarRules)
 
   return lines.filter(Boolean).join('\n')
 }
@@ -1923,6 +1943,40 @@ function PaneInner({ activeTheme, isForgeActive, wide = false }) {
                               onChange: v => bumpExtraColor(key, v)
                             })
                           )
+                        ]
+                      })
+                    }),
+                    jsxs(Section, {
+                      title: 'Sidebar (menu lateral)',
+                      children: jsxs('div', {
+                        className: 'grid grid-cols-1 gap-1.5',
+                        children: [
+                          jsx('p', {
+                            className: 'text-[0.625rem] leading-relaxed text-(--ui-text-quaternary)',
+                            children:
+                              'Cores específicas do menu lateral por elemento. Pinned segue a cor dos itens; hover/ativo continuam clareando (token próprio do app). Vazio = cor padrão do tema.'
+                          }),
+                          jsx(ColorResetField, {
+                            label: 'Nav (New Session · Capabilities · …)',
+                            value: extras.sidebarNavColor,
+                            defaultColor: colors.foreground,
+                            onChange: v => bumpExtras({ sidebarNavColor: v }),
+                            onReset: () => bumpExtras({ sidebarNavColor: null })
+                          }),
+                          jsx(ColorResetField, {
+                            label: 'Títulos de seção (Pinned, Recents…)',
+                            value: extras.sidebarSectionColor,
+                            defaultColor: colors.foreground,
+                            onChange: v => bumpExtras({ sidebarSectionColor: v }),
+                            onReset: () => bumpExtras({ sidebarSectionColor: null })
+                          }),
+                          jsx(ColorResetField, {
+                            label: 'Itens (sessões e projetos)',
+                            value: extras.sidebarItemColor,
+                            defaultColor: colors.foreground,
+                            onChange: v => bumpExtras({ sidebarItemColor: v }),
+                            onReset: () => bumpExtras({ sidebarItemColor: null })
+                          })
                         ]
                       })
                     })
